@@ -1,0 +1,212 @@
+================================================================================
+  PRINTFLOW — COMPLETE SETUP GUIDE (from zero to deployed)
+================================================================================
+
+PrintFlow is a self-service print ordering + shop operations + print execution
+platform: customers scan a QR, upload documents (PDF / photos / Word / PPT /
+Excel), configure print settings, pay online or at the counter, and track the
+job. Shops run everything from one admin panel, and a Windows Print Agent (or
+the built-in simulator) executes print jobs.
+
+--------------------------------------------------------------------------------
+1. WHAT YOU NEED
+--------------------------------------------------------------------------------
+  - Node.js 20+ (for local development)
+  - PostgreSQL 14+ (local install, or a hosted one — Supabase / Neon / RDS)
+  - Optional: Cashfree account for real online payments (UPI/cards/wallets)
+  - Optional: Vercel / Render / Railway / any Node host for deployment
+
+--------------------------------------------------------------------------------
+2. INSTALL & RUN LOCALLY
+--------------------------------------------------------------------------------
+  1) Unzip / clone this project, then in the project folder:
+
+       npm install
+
+  2) Create a .env file in the project root (already present in this package):
+
+       DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/app_db
+
+     Point it at YOUR PostgreSQL database if different.
+
+  3) Create the database (if it does not exist):
+
+       createdb app_db
+       # or: psql -c "CREATE DATABASE app_db;"
+
+  4) Push the database schema (creates all tables):
+
+       npx drizzle-kit push
+
+  5) Start the app:
+
+       npm run dev          # development  → http://localhost:3000
+       npm run build && npm start   # production
+
+--------------------------------------------------------------------------------
+3. FIRST ACCOUNT = PLATFORM ADMIN (no demo accounts)
+--------------------------------------------------------------------------------
+  There are NO demo accounts. The very first account registered on the system
+  automatically becomes the platform administrator:
+
+    1) Open http://localhost:3000/register
+    2) Create your account (name, email, password 8+ chars)
+    3) You land in the Admin panel → click "Create shop" on the dashboard
+    4) Your shop is seeded automatically with:
+         • default pricing (₹2/page B&W, ₹10/page colour, 18% GST, finishing)
+         • a paired Print Agent ("Main counter PC") in TEST MODE
+         • two printers (PDF simulator + shop laser printer)
+    5) Open Settings in the admin panel → your customer QR code is there.
+       Print it and stick it on your counter. Customers scan → upload → pay.
+
+  Later users who register get normal accounts; add them to your shop under
+  Admin → Staff & Roles (they must register with their email first).
+
+--------------------------------------------------------------------------------
+4. SUPABASE (HOSTED POSTGRES) — OPTIONAL
+--------------------------------------------------------------------------------
+  Any PostgreSQL works. To use Supabase:
+
+    1) Create a free account at https://supabase.com and create a new project.
+    2) Wait for provisioning, then open:
+         Project Settings → Database → Connection string (URI)
+    3) Copy the connection string, e.g.:
+         postgresql://postgres.xxxx:YOUR-PASSWORD@aws-0-ap-south-1.pooler.supabase.com:6543/postgres
+    4) Put it into .env (or your host's environment variables):
+         DATABASE_URL=<that string>
+       NOTE: use the Session/Transaction pooler (port 6543) for the app and
+       the Direct connection if a tool complains.
+    5) Run once:  npx drizzle-kit push     (creates PrintFlow tables)
+    6) Restart the app. Done — PrintFlow stores everything in your Supabase DB.
+
+  (Optional Supabase Auth/storage are NOT required — PrintFlow ships its own
+  secure session auth and stores files in the database.)
+
+--------------------------------------------------------------------------------
+5. CASHFREE PAYMENTS (REAL ONLINE PAYMENTS) — OPTIONAL
+--------------------------------------------------------------------------------
+  Without any keys, PrintFlow uses a built-in SANDBOX gateway so the entire
+  flow (quote → order → pay → print) is fully testable. To go live:
+
+    1) Sign up at https://merchant.cashfree.com and complete KYC.
+    2) In the Cashfree dashboard: Developers → API Keys → create keys.
+       Use the SANDBOX environment first, then switch to PRODUCTION.
+    3) Add these environment variables (server-side only, never in the app):
+
+         CASHFREE_APP_ID=your_app_id
+         CASHFREE_APP_SECRET=your_app_secret
+         CASHFREE_ENV=sandbox            # set to "production" for live
+         CASHFREE_WEBHOOK_SECRET=xxxx    # set in Cashfree → Developers → Webhooks
+
+    4) In Cashfree → Webhooks, add this URL:
+
+         https://YOUR-DOMAIN/api/payments/webhook-cashfree
+
+       Subscribe to the "order" events. PrintFlow verifies the webhook
+       signature (HMAC-SHA256), re-checks the order status with Cashfree,
+       and only then releases the job for printing. Duplicate/webhook replays
+       are idempotent.
+
+    5) Restart the app. Customers now get a real Cashfree checkout.
+
+--------------------------------------------------------------------------------
+6. USING THE APP (DAY-TO-DAY)
+--------------------------------------------------------------------------------
+  CUSTOMER SIDE
+    • Scan the shop QR (Admin → Settings → Customer QR code) or open /s/<slug>
+    • Upload PDF / JPG / PNG / Word / PowerPoint / Excel / TXT (max 25 MB)
+    • Set copies, colour, paper size, page range, duplex, N-up, finishing,
+      urgent — the server recalculates the exact price live
+    • Pay online or choose pay-at-counter → get order number + tracking link
+
+  SHOP SIDE (Admin panel)
+    • Dashboard: today's orders/revenue, queue overview, agent & printer health
+    • Orders: search/filter, record counter payments, approve/release, cancel,
+      reprint with reason, full execution logs
+    • Print queue: live view, pause/resume/retry/cancel jobs, assign printers,
+      priority control, payment/approval gates visible
+    • Payments: full ledger, verified-by tracking
+    • Pricing & services: per-page rates, size multipliers, duplex saving,
+      finishing prices, GST, minimum charge, urgent surcharge — versioned
+      (old orders keep their price snapshot), with live sample-quote preview
+    • Printers & Agent: agent pairing codes, token rotation/revocation,
+      test mode, pause agent, printer capabilities, one-click TEST PRINT
+    • Staff & Roles: owner / manager / operator / counter (server-enforced)
+    • Analytics, Audit log (every sensitive action), Settings
+    • Settings → Storage & Privacy → CLEAR MEMORY: safely deletes file bytes
+      of completed orders only (preview first, confirmation required,
+      order/payment/receipt history always preserved)
+
+  WINDOWS PRINT AGENT
+    • The admin panel includes a BUILT-IN SIMULATOR AGENT (Printers & Agent
+      page) that reproduces the real agent loop: poll → claim → download →
+      checksum-validate → prepare → spool → report. Start it and it will print
+      queued jobs without any physical printer.
+    • A real Windows agent talks to the same versioned API:
+        POST /api/agent/pair                  (pairing code → machine token)
+        POST /api/agent/heartbeat             (health + printer capabilities)
+        GET  /api/agent/jobs                  (available work)
+        POST /api/agent/jobs/:id/claim        (atomic claim + lease)
+        GET  /api/agent/download/:id          (scoped secure file download)
+        POST /api/agent/jobs/:id/progress     (stage events, idempotent)
+        POST /api/agent/jobs/:id/result       (completed/failed + spooler ref)
+      Auth: header "Authorization: Bearer <agent-token>".
+      Safety: unpaid/unapproved jobs are never claimable; emergency pause
+      blocks claims instantly; claims are leased so a crashed agent cannot
+      cause duplicate prints.
+
+--------------------------------------------------------------------------------
+7. OPERATING MODES & SAFETY FEATURES
+--------------------------------------------------------------------------------
+    • Automatic: paid orders go straight to the print queue
+    • Hybrid: paid orders wait for staff approval
+    • Manual: staff must release every order
+    • Emergency pause: one click stops all new job claims (audited)
+    • Server-side pricing & totals — the browser never decides amounts
+    • Idempotent order creation (double-click safe), webhook replay safe
+    • File magic-byte validation, size/page limits, corrupt-file rejection
+    • Office files (docx/pptx/xlsx) accepted and flagged for PDF conversion
+    • Dark theme by default; light theme toggle (sun/moon icon in the sidebar)
+
+--------------------------------------------------------------------------------
+8. DEPLOYMENT (VERCEL EXAMPLE)
+--------------------------------------------------------------------------------
+    1) Push this folder to GitHub.
+    2) vercel.com → New Project → import the repo.
+    3) Framework: Next.js (auto-detected). Build command: npm run build.
+    4) Add environment variables in the Vercel dashboard:
+         DATABASE_URL            (your Supabase/Neon/RDS connection string)
+         CASHFREE_APP_ID         (optional)
+         CASHFREE_APP_SECRET     (optional)
+         CASHFREE_ENV            (sandbox | production)
+         CASHFREE_WEBHOOK_SECRET (optional)
+    5) From your laptop run once against the production DB:
+         DATABASE_URL=<prod url> npx drizzle-kit push
+    6) Deploy. Register the first account → it becomes platform admin.
+    7) Add your Cashfree webhook: https://your-app.vercel.app/api/payments/webhook-cashfree
+
+  Other hosts (Render/Railway/Docker): same recipe — set env vars, run
+  `npx drizzle-kit push`, then `npm run build && npm start`.
+
+--------------------------------------------------------------------------------
+9. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  • "DATABASE_URL is required"      → create the .env file (section 2)
+  • Login page loops                 → cookies blocked? allow cookies for host
+  • Orders stuck in Awaiting payment → record a counter payment (Orders page)
+                                       or finish the online payment on the
+                                       tracking link
+  • Jobs queued but nothing prints   → start the simulator agent
+                                       (Printers & Agent page) or check the
+                                       real agent token/pairing, and make sure
+                                       Emergency pause is OFF (Settings)
+  • "Shop paused" when agent claims  → release Emergency pause in Settings
+  • File too large                   → limit is 25 MB per file (configurable
+                                       in src/lib/files.ts)
+  • QR code shows wrong URL          → QR is generated from the request host;
+                                       deploy behind your real domain
+
+================================================================================
+  That's it — register the first account, create your shop, start the
+  simulator agent, and you have a complete working print shop end-to-end.
+================================================================================
